@@ -1,6 +1,10 @@
 package eu.unitn.disi.db.excode.main;
 
+import com.koloboke.collect.map.hash.HashIntIntMap;
+import com.koloboke.collect.map.hash.HashIntIntMaps;
 import com.koloboke.collect.set.hash.HashIntSet;
+import com.koloboke.collect.set.hash.HashObjSet;
+import com.koloboke.collect.set.hash.HashObjSets;
 import eu.unitn.disi.db.excode.bucketization.MinHashBucketization;
 import eu.unitn.disi.db.excode.densesub.DenseSubgraphsFinder;
 import eu.unitn.disi.db.excode.graph.BinaryDynamicEdge;
@@ -16,13 +20,16 @@ import eu.unitn.disi.db.excode.utils.Pair;
 import eu.unitn.disi.db.excode.utils.Settings;
 import eu.unitn.disi.db.excode.utils.StopWatch;
 import eu.unitn.disi.db.excode.utils.Utilities;
+import eu.unitn.disi.db.excode.webserver.utils.Configuration;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -30,6 +37,9 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import jersey.repackaged.com.google.common.collect.Lists;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  *
@@ -82,6 +92,76 @@ public class Main {
         System.out.println("TOTAL TIME (min): " + watch.getElapsedTimeInMin());
         //store results
         writeResults(graph, result);
+    }
+    
+    public static String runTask(Configuration conf) throws JSONException {
+        System.out.println("Starting Task...");
+        try {
+            DynamicGraph graph = loadEdges(conf.Dataset.Path);
+            Collection<Pair<Integer, Integer>> correlatedPairs = graph.findCorrelatedPairs(conf.Task.Correlation);
+            GPCorrelationGraph gpgraph = new GPCorrelationGraph(graph.getNumEdges(), correlatedPairs);
+            GPCliqueFinder gpfinder = new GPCliqueFinder(gpgraph);
+            List<HashIntSet> gpcliques = gpfinder.findMaxCliquesWithCCs();
+            DenseSubgraphsFinder DSFinder = new DenseSubgraphsFinder(graph, conf);
+            List<HashIntSet> result = DSFinder.findDiverseDenseSubgraphs(gpcliques);
+            System.out.println("Done");
+            return stringify(graph, result);
+        } catch (IOException e) {
+            System.out.println(e.getMessage());
+            return "";
+        }
+    }
+    
+    public static String stringify(DynamicGraph graph, Collection<HashIntSet> result) throws JSONException {
+        if (result.isEmpty()) {
+            return "";
+        }
+        HashIntIntMap nodes = HashIntIntMaps.newMutableMap();
+        HashObjSet<Pair<Integer, Integer>> edges = HashObjSets.newMutableSet();
+        int nodeCount = 0;
+        for (Set<Integer> denseSub : result) {
+            for (int edge : denseSub) {
+                int src = graph.getSrc(edge);
+                int dst = graph.getDst(edge);
+                int srcId;
+                int dstId;
+                if (nodes.containsKey(src)) {
+                    srcId = nodes.get(src);
+                } else {
+                    srcId = nodeCount;
+                    nodes.put(src, nodeCount);
+                    nodeCount ++;
+                    
+                }
+                if (nodes.containsKey(dst)) {
+                    dstId = nodes.get(dst);
+                } else {
+                    dstId = nodeCount;
+                    nodes.put(dst, nodeCount);
+                    nodeCount ++;
+                }
+                edges.add(new Pair<>(srcId, dstId));
+            }
+        }
+        JSONObject obj = new JSONObject();
+        JSONArray JSONnodes = new JSONArray();
+        JSONArray JSONedges = new JSONArray();
+        List<Entry<Integer, Integer>> nodeList = new ArrayList(nodes.entrySet());
+        Collections.sort(nodeList, (Entry<Integer, Integer> o1, Entry<Integer, Integer> o2) -> Integer.compare(o1.getValue(), o2.getValue()));
+        for (Entry<Integer, Integer> entry : nodeList) {
+            JSONObject n = new JSONObject();
+            n.put("name", entry.getKey());
+            JSONnodes.put(n);
+        }
+        obj.put("nodes", JSONnodes);
+        for (Pair<Integer, Integer> edge : edges) {
+            JSONObject e = new JSONObject();
+            e.put("source", edge.getA());
+            e.put("target", edge.getB());
+            JSONedges.put(e);
+        }
+        obj.put("edges", JSONedges);
+        return obj.toString();
     }
 
     public static DynamicGraph loadEdges(String edgePath) throws IOException {

@@ -10,6 +10,7 @@ import eu.unitn.disi.db.excode.graph.SummaryGraph;
 import eu.unitn.disi.db.excode.utils.Pair;
 import eu.unitn.disi.db.excode.utils.Settings;
 import eu.unitn.disi.db.excode.utils.Utilities;
+import eu.unitn.disi.db.excode.webserver.utils.Configuration;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -25,11 +26,32 @@ public class DenseSubgraphsFinder {
     private final DynamicGraph graph;
     private final SummaryGraph summaryGraph;
     private final List<HashIntSet> denseCorrelatedEdges;
+    private Double minDen;
+    private Double maxJac;
+    private Integer maxCCSize;
+    private boolean isMA;
+    private Integer minEdgesInSnap;
 
     public DenseSubgraphsFinder(DynamicGraph graph) {
         this.graph = graph;
-        this.summaryGraph = new SummaryGraph(graph.getEdges());
+        this.summaryGraph = new SummaryGraph(graph.getEdges(), minEdgesInSnap);
         this.denseCorrelatedEdges = Lists.newArrayList();
+        this.minDen = Settings.minDen;
+        this.maxJac = Settings.maxJac;
+        this.maxCCSize = Settings.maxCCSize;
+        this.isMA = Settings.isMA;
+        this.minEdgesInSnap = Settings.minEdgesInSnap;
+    }
+    
+    public DenseSubgraphsFinder(DynamicGraph graph, Configuration conf) {
+        this.graph = graph;
+        this.summaryGraph = new SummaryGraph(graph.getEdges(), conf.Task.EdgesPerSnapshot);
+        this.denseCorrelatedEdges = Lists.newArrayList();
+        this.minDen = conf.Task.Density;
+        this.maxJac = conf.Task.Epsilon;
+        this.maxCCSize = conf.Task.MaxSize;
+        this.isMA = conf.Task.DensityFunction.equals("Minimum");
+        this.minEdgesInSnap = conf.Task.EdgesPerSnapshot;
     }
 
     public List<HashIntSet> findDiverseDenseSubgraphs(List<HashIntSet> cliques) {
@@ -41,28 +63,28 @@ public class DenseSubgraphsFinder {
     }
 
     private Pair<Integer, HashObjSet<HashIntSet>> iskMINDenseSubgraph(HashIntSet comp) {
-        Pair<HashIntSet, Integer> p = graph.getKEdgeSnaps(comp);
-        if (summaryGraph.isAVGDenseSubgraph(comp, p.getB(), p.getA().size(), Settings.minDen)) {
-            if (graph.isMINDense(comp, p.getA(), Settings.minDen)) {
+        Pair<HashIntSet, Integer> p = graph.getKEdgeSnaps(comp, minEdgesInSnap);
+        if (summaryGraph.isAVGDenseSubgraph(comp, p.getB(), p.getA().size(), minDen)) {
+            if (graph.isMINDense(comp, p.getA(), minDen)) {
                 return new Pair<Integer, HashObjSet<HashIntSet>>(1, null); 
             }
         }
-        if (!graph.containsDenseSubgraph(comp, p.getA(), Settings.minDen / 2)) {
+        if (!graph.containsDenseSubgraph(comp, p.getA(), minDen / 2)) {
             return new Pair<Integer, HashObjSet<HashIntSet>>(-1, null);
         }
-        HashObjSet<HashIntSet> denseSubs = graph.extractDenseSubgraphs(comp, p.getA(), Settings.minDen);
+        HashObjSet<HashIntSet> denseSubs = graph.extractDenseSubgraphs(comp, p.getA(), minDen);
         return (!denseSubs.isEmpty()) ? new Pair<Integer, HashObjSet<HashIntSet>>(0, denseSubs) 
                 : new Pair<Integer, HashObjSet<HashIntSet>>(-1, null);
     }
     
     private Pair<Integer, HashObjSet<HashIntSet>> iskAVGDenseSubgraph(HashIntSet comp) {
-        Pair<HashIntSet, Integer> p = graph.getKEdgeSnaps(comp);
-        if (summaryGraph.isAVGDenseSubgraph(comp, p.getB(), p.getA().size(), Settings.minDen)) {
+        Pair<HashIntSet, Integer> p = graph.getKEdgeSnaps(comp, minEdgesInSnap);
+        if (summaryGraph.isAVGDenseSubgraph(comp, p.getB(), p.getA().size(), minDen)) {
             return new Pair<Integer, HashObjSet<HashIntSet>>(1, null);
         }
         HashObjSet<HashIntSet> denseSubs = HashObjSets.newMutableSet();
-        if (summaryGraph.containsDenseSubgraph(comp, p.getB(), p.getA().size(), Settings.minDen / 2)) {
-            denseSubs = summaryGraph.extractDenseSubgraphs(comp, p.getB(), p.getA().size(), Settings.minDen);
+        if (summaryGraph.containsDenseSubgraph(comp, p.getB(), p.getA().size(), minDen / 2)) {
+            denseSubs = summaryGraph.extractDenseSubgraphs(comp, p.getB(), p.getA().size(), minDen);
         }
         return (!denseSubs.isEmpty()) ? new Pair<Integer, HashObjSet<HashIntSet>>(0, denseSubs)
                 : new Pair<Integer, HashObjSet<HashIntSet>>(-1, null);
@@ -72,7 +94,7 @@ public class DenseSubgraphsFinder {
         HashObjSet<HashIntSet> denseSubs = HashObjSets.newMutableSet();
         candidates.stream().forEachOrdered(cand -> {
             if (isValidCandidate(cand, denseSubs)) {
-                Pair<Integer, HashObjSet<HashIntSet>> result = (Settings.isMA) ? iskMINDenseSubgraph(cand) : iskAVGDenseSubgraph(cand);
+                Pair<Integer, HashObjSet<HashIntSet>> result = (isMA) ? iskMINDenseSubgraph(cand) : iskAVGDenseSubgraph(cand);
                 if (result.getA() == 1) {
                     denseCorrelatedEdges.add(cand);
                 } else if (result.getA() == 0) {
@@ -92,20 +114,20 @@ public class DenseSubgraphsFinder {
     }
 
     private boolean isValidCandidate(HashIntSet cand, HashObjSet<HashIntSet> denseSubs) {
-        if (cand.size() >= Settings.maxCCSize) {
+        if (cand.size() >= maxCCSize) {
             return false;
         }
         if (!isMaximalInCollection(cand, denseSubs) || !isMaximal(cand)) {
             return false;
         }
-        return denseCorrelatedEdges.parallelStream().noneMatch(res -> Utilities.jaccardSimilarity(res, cand) >= Settings.maxJac);
+        return denseCorrelatedEdges.parallelStream().noneMatch(res -> Utilities.jaccardSimilarity(res, cand) >= maxJac);
     }
     
     private boolean isValidCandidate(HashIntSet cand) {
         if (!isMaximal(cand)) {
             return false;
         }
-        return denseCorrelatedEdges.parallelStream().noneMatch(res -> Utilities.jaccardSimilarity(res, cand) >= Settings.maxJac);
+        return denseCorrelatedEdges.parallelStream().noneMatch(res -> Utilities.jaccardSimilarity(res, cand) >= maxJac);
     }
 
     private boolean isMaximal(HashIntSet cand) {
@@ -118,7 +140,7 @@ public class DenseSubgraphsFinder {
                 .parallelStream()
                 .flatMap(clique -> graph.findCCsER(clique).stream())
                 .distinct()
-                .filter(cc -> cc.size() >= Settings.minDen)
+                .filter(cc -> cc.size() >= minDen)
                 .collect(Collectors.toList());
         Collections.sort(allCCs, (HashIntSet s1, HashIntSet s2) -> -Integer.compare(s1.size(), s2.size()));
         System.out.println(".......................Found " + allCCs.size() + " CCs in (s) " + ((System.currentTimeMillis() - start) / 1000));

@@ -160,6 +160,30 @@ public abstract class DynamicGraph extends Graph<DynamicEdge> {
         return new Pair<HashIntSet, Integer>(existing, skipped);
     }
     
+    public Pair<HashIntSet, Integer> getKEdgeSnaps(HashIntSet comp, Integer minEdgesInSnap) {
+        HashIntIntMap existCount = HashIntIntMaps.newMutableMap();
+        getEdgeList(comp).stream().forEach(edge -> {
+            IntStream.range(0, getNumSnaps()).forEach(t -> {
+                if (edge.existsInT(t)) {
+                    existCount.put(t, existCount.getOrDefault(t, 0) + 1);
+                }
+            });
+        });
+        HashIntSet existing = existCount.entrySet().stream()
+                .filter(e -> e.getValue() >= minEdgesInSnap)
+                .collect(() -> HashIntSets.newMutableSet(), 
+                        (HashIntSet t, Map.Entry<Integer, Integer> u) -> t.add(u.getKey()), 
+                        (HashIntSet t, HashIntSet u) -> t.addAll(u));
+        int skipped = 0;
+        if (minEdgesInSnap > 0 && existing.size() < getNumSnaps()) {
+            skipped = existCount.entrySet().stream()
+                .filter(e -> e.getValue() < minEdgesInSnap)
+                .mapToInt(e -> e.getValue())
+                .sum();
+        }
+        return new Pair<HashIntSet, Integer>(existing, skipped);
+    }
+    
     public boolean containsDenseSubgraph(HashIntSet comp, double minDen) {
         HashIntSet temp = HashIntSets.newMutableSet(comp);
         HashIntObjMap<HashIntSet> nodeEdgeMap = HashIntObjMaps.newMutableMap();

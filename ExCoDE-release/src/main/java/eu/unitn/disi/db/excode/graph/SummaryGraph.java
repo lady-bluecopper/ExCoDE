@@ -13,7 +13,6 @@ import com.koloboke.collect.set.hash.HashObjSet;
 import com.koloboke.collect.set.hash.HashObjSets;
 import eu.unitn.disi.db.excode.densesub.MetaData;
 import eu.unitn.disi.db.excode.utils.Pair;
-import eu.unitn.disi.db.excode.utils.Settings;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map.Entry;
@@ -27,19 +26,23 @@ import java.util.stream.IntStream;
 public class SummaryGraph {
 
     private final int numSnaps;
+    private final int minEdgesInSnap;
     private List<DynamicEdge> seeds;
     private HashIntObjMap<WeightedEdge> edges;
    
 
-    public SummaryGraph(List<DynamicEdge> seeds) {
+    public SummaryGraph(List<DynamicEdge> seeds, int minEdgesInSnap) {
         this.numSnaps = seeds.get(0).getEdgeSeries().length;
         this.seeds = seeds;
+        this.minEdgesInSnap = minEdgesInSnap;
         initializeEdgeMap(seeds);
+        System.out.println("Summary Graph created.");
     }
     
-    public SummaryGraph(int numSnaps, List<WeightedEdge> seeds) {
+    public SummaryGraph(int numSnaps, List<WeightedEdge> seeds, int minEdgesInSnap) {
         this.numSnaps = numSnaps;
         this.edges = HashIntObjMaps.newMutableMap();
+        this.minEdgesInSnap = minEdgesInSnap;
         seeds.stream().forEach(e -> this.edges.put(e.getEdgeID(), e));
     }
 
@@ -507,12 +510,12 @@ public class SummaryGraph {
         });
         HashIntSet existing = HashIntSets.newMutableSet();
         existCount.entrySet().stream()
-                .filter(e -> e.getValue() >= Settings.minEdgesInSnap)
+                .filter(e -> e.getValue() >= minEdgesInSnap)
                 .forEach(e -> existing.add(e.getKey()));
         int skipped = 0;
-        if (Settings.minEdgesInSnap > 1 && existing.size() < numSnaps) {
+        if (minEdgesInSnap > 1 && existing.size() < numSnaps) {
             skipped = existCount.entrySet().stream()
-                .filter(e -> e.getValue() < Settings.minEdgesInSnap)
+                .filter(e -> e.getValue() < minEdgesInSnap)
                 .mapToInt(e -> e.getValue())
                 .sum();
         }
