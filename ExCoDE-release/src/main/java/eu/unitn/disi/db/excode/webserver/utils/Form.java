@@ -8,7 +8,9 @@ public class Form {
     
     public String config;
     public String dataset;
-    public String path;
+    public String fileGroup;
+    public String path_local;
+    public String path_remote;
     public Double correlation;
     public String densityGroup;
     public Double density;
@@ -22,7 +24,11 @@ public class Form {
         Configuration conf = new Configuration();
         conf.Name = config;
         conf.Dataset.Name = dataset;
-        conf.Dataset.Path = path;
+        if (fileGroup.equals("local")) {
+            conf.Dataset.Path = path_local;
+        } else {
+            conf.Dataset.Path = path_remote;
+        }
         conf.Dataset.Properties.Labeled = false;
         conf.Dataset.Properties.Weighted = false;
         conf.Task.Correlation = correlation;

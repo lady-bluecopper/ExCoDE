@@ -16,6 +16,7 @@ import eu.unitn.disi.db.excode.correlation.PearsonCorrelation;
 import eu.unitn.disi.db.excode.densesub.MetaData;
 import eu.unitn.disi.db.excode.utils.Pair;
 import eu.unitn.disi.db.excode.utils.Settings;
+import eu.unitn.disi.db.excode.webserver.utils.Configuration.Subgraph;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -599,5 +600,25 @@ public abstract class DynamicGraph extends Graph<DynamicEdge> {
             size--;
         }
         return HashObjSets.newMutableSet();
+    }
+    
+    private HashIntSet retainInSnap(HashIntSet edgeSet, int snap) {
+        HashIntSet output = HashIntSets.newMutableSet();
+        edgeSet.stream()
+                .filter(e -> getEdge(e).existsInT(snap))
+                .forEach(e -> output.add(e));
+        System.out.println(snap + " " + output.size());
+        return output;
+    }
+    
+    public HashIntObjMap<HashIntSet> generateExplodeView(Subgraph subgraph, Integer edgesPerSnapshot) {
+        HashIntObjMap views = HashIntObjMaps.newMutableMap();
+        HashIntSet edgeSet = HashIntSets.newMutableSet();
+        subgraph.edges.stream().forEach(edge -> edgeSet.add(getEdgeId(edge.source, edge.target)));
+        Pair<HashIntSet, Integer> p = getKEdgeSnaps(edgeSet);
+        for (int snap : p.getA()) {
+            views.put(snap, retainInSnap(edgeSet, snap));
+        }
+        return views;
     }
 }

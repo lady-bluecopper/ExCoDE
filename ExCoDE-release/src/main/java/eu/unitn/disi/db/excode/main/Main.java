@@ -2,7 +2,12 @@ package eu.unitn.disi.db.excode.main;
 
 import com.koloboke.collect.map.hash.HashIntIntMap;
 import com.koloboke.collect.map.hash.HashIntIntMaps;
+import com.koloboke.collect.map.hash.HashIntObjMap;
+import com.koloboke.collect.map.hash.HashIntObjMaps;
+import com.koloboke.collect.map.hash.HashObjObjMap;
+import com.koloboke.collect.map.hash.HashObjObjMaps;
 import com.koloboke.collect.set.hash.HashIntSet;
+import com.koloboke.collect.set.hash.HashIntSets;
 import com.koloboke.collect.set.hash.HashObjSet;
 import com.koloboke.collect.set.hash.HashObjSets;
 import eu.unitn.disi.db.excode.bucketization.MinHashBucketization;
@@ -29,7 +34,6 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -52,7 +56,7 @@ public class Main {
     public static void main(String[] args) throws Exception {
         //parse the command line arguments
         CommandLineParser.parse(args);
-        
+
         watch = new StopWatch();
         StopWatch watch2 = new StopWatch();
         //load dynamic graph
@@ -93,8 +97,8 @@ public class Main {
         //store results
         writeResults(graph, result);
     }
-    
-    public static String runTask(Configuration conf) throws JSONException {
+
+    public static String runTask(Configuration conf) {
         System.out.println("Starting Task...");
         try {
             DynamicGraph graph = loadEdges(conf.Dataset.Path);
@@ -105,22 +109,110 @@ public class Main {
             DenseSubgraphsFinder DSFinder = new DenseSubgraphsFinder(graph, conf);
             List<HashIntSet> result = DSFinder.findDiverseDenseSubgraphs(gpcliques);
             System.out.println("Done");
-            return stringify(graph, result);
-        } catch (IOException e) {
+            return subs2JSON(graph, result);
+        } catch (IOException | JSONException e) {
             System.out.println(e.getMessage());
             return "";
         }
     }
-    
-    public static String stringify(DynamicGraph graph, Collection<HashIntSet> result) throws JSONException {
+
+    public static String runExplorationTask(Configuration conf) {
+        System.out.println("Starting Exploration Task...");
+        try {
+            DynamicGraph graph = loadEdges(conf.Dataset.Path);
+            HashIntObjMap<HashIntSet> views = graph.generateExplodeView(conf.Subgraph, conf.Task.EdgesPerSnapshot);
+            System.out.println("Done");
+            return views2JSON(graph, views);
+        } catch (IOException | JSONException e) {
+            System.out.println(e.getMessage());
+            return "";
+        }
+    }
+
+    public static String subs2JSON(DynamicGraph graph, List<HashIntSet> result) throws JSONException {
         if (result.isEmpty()) {
             return "";
         }
-        HashIntIntMap nodes = HashIntIntMaps.newMutableMap();
-        HashObjSet<Pair<Integer, Integer>> edges = HashObjSets.newMutableSet();
+        HashIntObjMap<Pair<Integer, HashIntSet>> nodes = HashIntObjMaps.newMutableMap();
+        HashObjObjMap<Pair<Integer, Integer>, HashIntSet> edges = HashObjObjMaps.newMutableMap();
         int nodeCount = 0;
-        for (Set<Integer> denseSub : result) {
-            for (int edge : denseSub) {
+        for (int s = 0; s < result.size(); s++) {
+            for (int edge : result.get(s)) {
+                int src = graph.getSrc(edge);
+                int dst = graph.getDst(edge);
+                int srcId;
+                int dstId;
+                if (nodes.containsKey(src)) {
+                    Pair<Integer, HashIntSet> srcP = nodes.get(src);
+                    srcId = srcP.getA();
+                    HashIntSet srcA = srcP.getB();
+                    srcA.add(s);
+                    nodes.put(src, new Pair<Integer, HashIntSet>(srcId, srcA));
+                } else {
+                    srcId = nodeCount;
+                    HashIntSet srcA = HashIntSets.newMutableSet();
+                    srcA.add(s);
+                    nodes.put(src, new Pair<Integer, HashIntSet>(nodeCount, srcA));
+                    nodeCount++;
+                }
+                if (nodes.containsKey(dst)) {
+                    Pair<Integer, HashIntSet> dstP = nodes.get(dst);
+                    dstId = dstP.getA();
+                    HashIntSet dstA = dstP.getB();
+                    dstA.add(s);
+                    nodes.put(dst, new Pair<Integer, HashIntSet>(dstId, dstA));
+                } else {
+                    dstId = nodeCount;
+                    HashIntSet dstA = HashIntSets.newMutableSet();
+                    dstA.add(s);
+                    nodes.put(dst, new Pair<Integer, HashIntSet>(nodeCount, dstA));
+                    nodeCount++;
+                }
+                Pair<Integer, Integer> thisEdge = new Pair<>(srcId, dstId);
+                HashIntSet apps = edges.getOrDefault(thisEdge, HashIntSets.newMutableSet());
+                apps.add(s);
+                edges.put(thisEdge, apps);
+            }
+        }
+        JSONObject obj = new JSONObject();
+        JSONArray JSONnodes = new JSONArray();
+        JSONArray JSONedges = new JSONArray();
+        List<Entry<Integer, Pair<Integer, HashIntSet>>> nodeList = new ArrayList(nodes.entrySet());
+        Collections.sort(nodeList, (Entry<Integer, Pair<Integer, HashIntSet>> o1, Entry<Integer, Pair<Integer, HashIntSet>> o2) -> Integer.compare(o1.getValue().getA(), o2.getValue().getA()));
+        for (Entry<Integer, Pair<Integer, HashIntSet>> entry : nodeList) {
+            JSONObject n = new JSONObject();
+            n.put("name", entry.getKey());
+            StringBuilder builder = new StringBuilder();
+            entry.getValue().getB().stream().forEach(sub -> builder.append(",").append(sub));
+            n.put("sids", builder.substring(1));
+            JSONnodes.put(n);
+        }
+        obj.put("nodes", JSONnodes);
+        for (Entry<Pair<Integer, Integer>, HashIntSet> entry : edges.entrySet()) {
+            JSONObject e = new JSONObject();
+            e.put("source", entry.getKey().getA());
+            e.put("target", entry.getKey().getB());
+            StringBuilder builder = new StringBuilder();
+            entry.getValue().stream().forEach(sub -> builder.append(",").append(sub));
+            e.put("sids", builder.substring(1));
+            JSONedges.put(e);
+        }
+        obj.put("edges", JSONedges);
+        return obj.toString();
+    }
+
+    public static String views2JSON(DynamicGraph graph, HashIntObjMap<HashIntSet> views) throws JSONException {
+        if (views.isEmpty()) {
+            return "";
+        }
+        JSONArray snapshots = new JSONArray();
+        List<Entry<Integer, HashIntSet>> entries = new ArrayList(views.entrySet());
+        Collections.sort(entries, (Entry<Integer, HashIntSet> e1, Entry<Integer, HashIntSet> e2) -> Integer.compare(e1.getKey(), e2.getKey()));
+        for (Entry<Integer, HashIntSet> entry : entries) {
+            HashIntIntMap nodes = HashIntIntMaps.newMutableMap();
+            HashObjSet<Pair<Integer, Integer>> edges = HashObjSets.newMutableSet();
+            int nodeCount = 0;
+            for (int edge : entry.getValue()) {
                 int src = graph.getSrc(edge);
                 int dst = graph.getDst(edge);
                 int srcId;
@@ -130,38 +222,43 @@ public class Main {
                 } else {
                     srcId = nodeCount;
                     nodes.put(src, nodeCount);
-                    nodeCount ++;
-                    
+                    nodeCount++;
+
                 }
                 if (nodes.containsKey(dst)) {
                     dstId = nodes.get(dst);
                 } else {
                     dstId = nodeCount;
                     nodes.put(dst, nodeCount);
-                    nodeCount ++;
+                    nodeCount++;
                 }
                 edges.add(new Pair<>(srcId, dstId));
             }
+            JSONObject obj = new JSONObject();
+            JSONArray JSONnodes = new JSONArray();
+            JSONArray JSONedges = new JSONArray();
+            List<Entry<Integer, Integer>> nodeList = new ArrayList(nodes.entrySet());
+            Collections.sort(nodeList, (Entry<Integer, Integer> o1, Entry<Integer, Integer> o2) -> Integer.compare(o1.getValue(), o2.getValue()));
+            for (Entry<Integer, Integer> node : nodeList) {
+                JSONObject n = new JSONObject();
+                n.put("name", node.getKey());
+                JSONnodes.put(n);
+            }
+            obj.put("nodes", JSONnodes);
+
+            for (Pair<Integer, Integer> edge : edges) {
+                JSONObject e = new JSONObject();
+                e.put("source", edge.getA());
+                e.put("target", edge.getB());
+                JSONedges.put(e);
+            }
+            obj.put("edges", JSONedges);
+            JSONObject view = new JSONObject();
+            view.put("number", entry.getKey());
+            view.put("subgraph", obj);
+            snapshots.put(view);
         }
-        JSONObject obj = new JSONObject();
-        JSONArray JSONnodes = new JSONArray();
-        JSONArray JSONedges = new JSONArray();
-        List<Entry<Integer, Integer>> nodeList = new ArrayList(nodes.entrySet());
-        Collections.sort(nodeList, (Entry<Integer, Integer> o1, Entry<Integer, Integer> o2) -> Integer.compare(o1.getValue(), o2.getValue()));
-        for (Entry<Integer, Integer> entry : nodeList) {
-            JSONObject n = new JSONObject();
-            n.put("name", entry.getKey());
-            JSONnodes.put(n);
-        }
-        obj.put("nodes", JSONnodes);
-        for (Pair<Integer, Integer> edge : edges) {
-            JSONObject e = new JSONObject();
-            e.put("source", edge.getA());
-            e.put("target", edge.getB());
-            JSONedges.put(e);
-        }
-        obj.put("edges", JSONedges);
-        return obj.toString();
+        return snapshots.toString();
     }
 
     public static DynamicGraph loadEdges(String edgePath) throws IOException {
@@ -177,10 +274,10 @@ public class Main {
             int srcId = Integer.parseInt(parts[0]);
             int dstId = Integer.parseInt(parts[1]);
             if (nodes.putIfAbsent(srcId, node_counter) == null) {
-                node_counter ++;
+                node_counter++;
             }
             if (nodes.putIfAbsent(dstId, node_counter) == null) {
-                node_counter ++;
+                node_counter++;
             }
             int label;
             String[] series;
@@ -210,14 +307,14 @@ public class Main {
             g = new BinaryDynamicGraph(nodes.size(), edges.size());
         }
         List<Entry<Integer, Integer>> node_list = Lists.newArrayList(nodes.entrySet());
-        Collections.sort(node_list, (Entry<Integer, Integer> e1, Entry<Integer, Integer> e2) 
+        Collections.sort(node_list, (Entry<Integer, Integer> e1, Entry<Integer, Integer> e2)
                 -> Integer.compare(e1.getValue(), e2.getValue()));
         node_list.stream().forEach(e -> g.addNode(e.getValue(), e.getKey()));
         edges.stream().forEachOrdered(edge -> g.addEdge(edge));
         System.out.println("Nodes: " + g.getNumNodes() + " Edges: " + g.getNumEdges());
         return g;
     }
-    
+
     public static void writeResults(DynamicGraph graph, Collection<HashIntSet> densCorEdges) throws IOException {
         try {
             FileWriter fw = new FileWriter(Settings.outputFolder + "statistics.csv", true);
@@ -238,14 +335,14 @@ public class Main {
             e.printStackTrace();
         }
         try {
-            String fName = "ExCoDE_" + Settings.edgeFile + 
-                    "_C" + Settings.minCor + 
-                    "D" + Settings.minDen + 
-                    ((Settings.isMA) ? "M" : "A") + 
-                    "K" + Settings.minEdgesInSnap + 
-                    "S" + Settings.maxCCSize +
-                    "E" + Settings.maxJac +
-                    ((!Settings.isExact) ? "AX" + Settings.numHashFuncs + "+" + Settings.numHashRuns : "");
+            String fName = "ExCoDE_" + Settings.edgeFile
+                    + "_C" + Settings.minCor
+                    + "D" + Settings.minDen
+                    + ((Settings.isMA) ? "M" : "A")
+                    + "K" + Settings.minEdgesInSnap
+                    + "S" + Settings.maxCCSize
+                    + "E" + Settings.maxJac
+                    + ((!Settings.isExact) ? "AX" + Settings.numHashFuncs + "+" + Settings.numHashRuns : "");
             FileWriter fwP = new FileWriter(Settings.outputFolder + fName);
             for (Set<Integer> denseSub : densCorEdges) {
                 StringBuilder builder = new StringBuilder();
