@@ -270,6 +270,26 @@ public abstract class DynamicGraph extends Graph<DynamicEdge> {
                 .noneMatch(avgDeg -> avgDeg < minDen);
     }
     
+    public double getMINDensity(HashIntSet comp, HashIntSet existing) {
+        HashIntSet compNodes = getNodesOf(comp);
+        return existing.parallelStream()
+                .map(t -> {
+                    HashIntIntMap nodeDegs = HashIntIntMaps.newMutableMap();
+                    final int s = t;
+                    comp.stream()
+                            .filter(id -> edges.get(id).existsInT(s))
+                            .forEach(id -> {
+                                DynamicEdge e = edges.get(id);
+                                nodeDegs.put(e.getSrc(), nodeDegs.getOrDefault(e.getSrc(), 0) + 1);
+                                nodeDegs.put(e.getDst(), nodeDegs.getOrDefault(e.getDst(), 0) + 1);
+                            });
+                    return nodeDegs;
+                })
+                .mapToDouble(nodeDegs -> (nodeDegs.size() < 2) ? 0 : compNodes.stream().mapToInt(x -> nodeDegs.getOrDefault((int) x, 0)).average().getAsDouble())
+                .min()
+                .getAsDouble();
+    }
+    
     public boolean containsDenseSubgraph(HashIntSet comp, HashIntSet existing, double minDen) {
         HashIntSet temp = HashIntSets.newMutableSet(comp);
         HashIntObjMap<HashIntSet> nodeEdgeMap = HashIntObjMaps.newMutableMap();
@@ -437,6 +457,101 @@ public abstract class DynamicGraph extends Graph<DynamicEdge> {
                 HashIntSet candExisting = candData.snapInfo;
                 if (isMINDense(candidate, candExisting, minDen)) {
                     denseSubs.add(candidate);
+                } else if (!candExisting.isEmpty()) {
+                    List<Integer> minIndices = Lists.newArrayList();
+                    min = Integer.MAX_VALUE;
+                    max = 0;
+                    for (Map.Entry<Integer, HashIntSet> e : nodeEdgeCand.entrySet()) {
+                        int curr = e.getValue().size();
+                        min = Math.min(curr, min);
+                        max = Math.max(curr, max);
+                    }
+                    if (max < minDen) {
+                        continue;
+                    }
+                    final int minDeg = min;
+                    nodeEdgeCand.entrySet().stream().filter(e -> e.getValue().size() == minDeg).forEach(e -> minIndices.add(e.getKey()));
+                    if (minDeg == 0) {
+                        minIndices.stream().forEach(id -> nodeEdgeCand.remove(id));
+                        int newSize = size - minIndices.size();
+                        HashObjSet<HashIntSet> currSet = queue.getOrDefault(newSize, HashObjSets.newMutableSet());
+                        currSet.add(candidate);
+                        queue.put(newSize, currSet);
+                        candsData.replace(candidate, new MetaData<HashIntSet>(nodeEdgeCand, candExisting));
+                        continue;
+                    } 
+                    if (minDeg == 1) {
+                        HashIntSet tempCand = HashIntSets.newMutableSet(candidate);
+                        HashIntSet toRemove = HashIntSets.newMutableSet();
+                        nodeEdgeCand.entrySet().stream()
+                                .filter(e -> minIndices.contains(e.getKey()))
+                                .forEach(e -> toRemove.addAll(e.getValue()));
+                        tempCand.removeAll(toRemove);
+                        Pair<HashIntSet, Integer> p = getKEdgeSnaps(tempCand);
+                        if (tempCand.size() > 0 && !isMINDense(tempCand, p.getA(), minDen) && !candsData.containsKey(tempCand)) {
+                            candidate.removeAll(toRemove);
+                            nodeEdgeCand.values().forEach(edgeList -> edgeList.removeAll(toRemove));
+                            minIndices.stream().forEach(id -> nodeEdgeCand.remove(id));
+                            int newSize = size - minIndices.size();
+                            HashObjSet<HashIntSet> currSet = queue.getOrDefault(newSize, HashObjSets.newMutableSet());
+                            currSet.add(candidate);
+                            queue.put(newSize, currSet);
+                            candsData.put(candidate, new MetaData<HashIntSet>(nodeEdgeCand, p.getA()));
+                            continue;
+                        } 
+                    }
+                    for (int node : minIndices) {
+                        HashIntObjMap<HashIntSet> newMap = HashIntObjMaps.newMutableMap();
+                        nodeEdgeCand.entrySet().forEach(entry -> newMap.put(entry.getKey(), HashIntSets.newMutableSet(entry.getValue())));
+                        HashIntSet newCand = HashIntSets.newMutableSet(candidate);
+                        HashIntSet toRemove = HashIntSets.newMutableSet(newMap.getOrDefault(node, HashIntSets.newMutableSet()));
+                        newCand.removeAll(toRemove);
+                        newMap.values().forEach(edgeList -> edgeList.removeAll(toRemove));
+                        newMap.remove(node);
+                        if (newCand.size() > 0 && !candsData.containsKey(newCand)) {
+                            HashObjSet<HashIntSet> currSet = queue.getOrDefault(size - 1, HashObjSets.newMutableSet());
+                            currSet.add(newCand);
+                            queue.put(size - 1, currSet);
+                            Pair<HashIntSet, Integer> p = getKEdgeSnaps(newCand);
+                            candsData.put(newCand, new MetaData<HashIntSet>(newMap, p.getA()));
+                        }
+                    }
+                }
+            }
+            queue.remove(size);
+            size--;
+        }
+        return denseSubs;
+    }
+    
+    public HashObjSet<Pair<HashIntSet, Double>> extractDenseSubgraphsWithScore(HashIntSet comp, HashIntSet existing, double minDen) {
+        HashObjSet<Pair<HashIntSet, Double>> denseSubs = HashObjSets.newMutableSet();
+        HashIntObjMap<HashObjSet<HashIntSet>> queue = HashIntObjMaps.newMutableMap();
+        HashObjObjMap<HashIntSet, MetaData> candsData = HashObjObjMaps.newMutableMap();
+        HashIntObjMap<HashIntSet> thisNodeEdgeMap = HashIntObjMaps.newMutableMap();
+        int min;
+        int max;
+        comp.stream().forEach(e -> {
+            HashIntSet srcList = thisNodeEdgeMap.getOrDefault(edges.get(e).getSrc(), HashIntSets.newMutableSet());
+            srcList.add(e);
+            HashIntSet dstList = thisNodeEdgeMap.getOrDefault(edges.get(e).getDst(), HashIntSets.newMutableSet());
+            dstList.add(e);
+            thisNodeEdgeMap.put(edges.get(e).getSrc(), srcList);
+            thisNodeEdgeMap.put(edges.get(e).getDst(), dstList);
+        });
+        int size = thisNodeEdgeMap.size();
+        HashObjSet<HashIntSet> firstSet = HashObjSets.newMutableSet();
+        firstSet.add(comp);
+        queue.put(size, firstSet);
+        candsData.putIfAbsent(comp, new MetaData<HashIntSet>(thisNodeEdgeMap, existing));
+        while (size > 1 && !queue.isEmpty()) {
+            HashObjSet<HashIntSet> candidates = queue.getOrDefault(size, HashObjSets.newMutableSet()); 
+            for (HashIntSet candidate : candidates) {
+                MetaData<HashIntSet> candData = candsData.get(candidate);
+                HashIntObjMap<HashIntSet> nodeEdgeCand = candData.nodeEdgeMap;
+                HashIntSet candExisting = candData.snapInfo;
+                if (isMINDense(candidate, candExisting, minDen)) {
+                    denseSubs.add(new Pair<>(candidate, getMINDensity(candidate, candExisting)));
                 } else if (!candExisting.isEmpty()) {
                     List<Integer> minIndices = Lists.newArrayList();
                     min = Integer.MAX_VALUE;

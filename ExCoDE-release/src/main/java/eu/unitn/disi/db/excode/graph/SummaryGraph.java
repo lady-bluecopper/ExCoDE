@@ -88,6 +88,14 @@ public class SummaryGraph {
         }
         return getWeightSumOf(comp) - skipped >= minDen * numkSnaps * numNodes / 2;
     }
+    
+    public double getAVGDensity(HashIntSet comp, int skipped, int numkSnaps) {
+        return 2 * (getWeightSumOf(comp) - skipped) / (numkSnaps * getNumNodesOf(comp));
+    }
+    
+    public double getAVGDensity(HashIntSet comp, int numNodes, int skipped, int numkSnaps) {
+        return 2 * (getWeightSumOf(comp) - skipped) / (numkSnaps * numNodes);
+    }
 
     public boolean isAVGDenseSubgraph(HashIntSet comp, int numNodes, double minDen) {
         if (numNodes < 2 && minDen > 0) {
@@ -329,6 +337,106 @@ public class SummaryGraph {
                 int candNumSnaps = candData.snapInfo.getB();
                 if (isAVGDenseSubgraph(candidate, size, candSkipped, candNumSnaps, minDen)) {
                     denseSubs.add(candidate);
+                    continue;
+                }
+                if (candNumSnaps == 0) {
+                    continue;
+                }
+                List<Integer> minIndices = Lists.newArrayList();
+                min = Integer.MAX_VALUE;
+                max = 0;
+                for (Entry<Integer, HashIntSet> e : nodeEdgeCand.entrySet()) {
+                    int curr = e.getValue().size();
+                    min = Math.min(curr, min);
+                    max = Math.max(curr, max);
+                }
+                if (max < minDen) {
+                    continue;
+                }
+                final int minDeg = min;
+                nodeEdgeCand.entrySet().stream().filter(e -> e.getValue().size() == minDeg).forEach(e -> minIndices.add(e.getKey()));
+                if (minDeg == 0) {
+                    minIndices.stream().forEach(id -> nodeEdgeCand.remove(id));
+                    int newSize = size - minIndices.size();
+                    HashObjSet<HashIntSet> currSet = queue.getOrDefault(newSize, HashObjSets.newMutableSet());
+                    currSet.add(candidate);
+                    queue.put(newSize, currSet);
+                    candsData.replace(candidate, new MetaData<Pair<Integer, Integer>>(nodeEdgeCand, candData.snapInfo));
+                    continue;
+                } 
+                if (minDeg == 1 && minIndices.size() > 1) {
+                    HashIntSet tempCand = HashIntSets.newMutableSet(candidate);
+                    HashIntSet toRemove = HashIntSets.newMutableSet();
+                    nodeEdgeCand.entrySet().stream()
+                            .filter(e -> minIndices.contains(e.getKey()))
+                            .forEach(e -> toRemove.addAll(e.getValue()));
+                    tempCand.removeAll(toRemove);
+                    int newSize = size - minIndices.size();
+                    Pair<Integer, Integer> p = getKEdgeSnaps(tempCand);
+                    if (tempCand.size() > 0 && !isAVGDenseSubgraph(tempCand, newSize, p.getA(), p.getB(), minDen) && !candsData.containsKey(tempCand)) {
+                        candidate.removeAll(toRemove);
+                        nodeEdgeCand.values().forEach(edgeList -> edgeList.removeAll(toRemove));
+                        minIndices.stream().forEach(id -> nodeEdgeCand.remove(id));
+                        HashObjSet<HashIntSet> currSet = queue.getOrDefault(newSize, HashObjSets.newMutableSet());
+                        currSet.add(candidate);
+                        queue.put(newSize, currSet);
+                        candsData.put(candidate, new MetaData<Pair<Integer, Integer>>(nodeEdgeCand, p));
+                        continue;
+                    } 
+                }
+                for (int node : minIndices) {
+                    HashIntObjMap<HashIntSet> newMap = HashIntObjMaps.newMutableMap();
+                    nodeEdgeCand.entrySet().forEach(entry -> newMap.put(entry.getKey(), HashIntSets.newMutableSet(entry.getValue())));
+                    HashIntSet newCand = HashIntSets.newMutableSet(candidate);
+                    HashIntSet toRemove = HashIntSets.newMutableSet(newMap.getOrDefault(node, HashIntSets.newMutableSet()));
+                    newCand.removeAll(toRemove);
+                    newMap.values().forEach(edgeList -> edgeList.removeAll(toRemove));
+                    newMap.remove(node);
+                    if (newCand.size() > 0 && !candsData.containsKey(newCand)) {
+                        HashObjSet<HashIntSet> currSet = queue.getOrDefault(size - 1, HashObjSets.newMutableSet());
+                        currSet.add(newCand);
+                        queue.put(size - 1, currSet);
+                        Pair<Integer, Integer> p = getKEdgeSnaps(newCand);
+                        candsData.put(newCand, new MetaData<Pair<Integer, Integer>>(newMap, p));
+                    }
+                }
+            }
+            queue.remove(size);
+            size--;
+        }
+        return denseSubs;
+    }
+    
+    public HashObjSet<Pair<HashIntSet, Double>> extractDenseSubgraphsWithScore(HashIntSet comp, int skipped, int numSnaps, double minDen) {
+        HashObjSet<Pair<HashIntSet, Double>> denseSubs = HashObjSets.newMutableSet();
+        HashIntObjMap<HashObjSet<HashIntSet>> queue = HashIntObjMaps.newMutableMap();
+        HashObjObjMap<HashIntSet, MetaData> candsData = HashObjObjMaps.newMutableMap();
+        int min;
+        int max;
+        HashIntObjMap<HashIntSet> nodeEdges = HashIntObjMaps.newMutableMap();
+        comp.stream().forEach(e -> {
+            WeightedEdge edge = edges.get(e);
+            HashIntSet srcList = nodeEdges.getOrDefault(edge.getSrc(), HashIntSets.newMutableSet());
+            srcList.add(e);
+            HashIntSet dstList = nodeEdges.getOrDefault(edge.getDst(), HashIntSets.newMutableSet());
+            dstList.add(e);
+            nodeEdges.put(edge.getSrc(), srcList);
+            nodeEdges.put(edge.getDst(), dstList);
+        });
+        int size = nodeEdges.size();
+        HashObjSet<HashIntSet> firstSet = HashObjSets.newMutableSet();
+        firstSet.add(comp);
+        queue.put(size, firstSet);
+        candsData.put(comp, new MetaData<Pair<Integer, Integer>>(nodeEdges, new Pair<Integer, Integer>(skipped, numSnaps)));
+        while (size > 1 && !queue.isEmpty()) {
+            HashObjSet<HashIntSet> candidates = queue.getOrDefault(size, HashObjSets.newMutableSet());
+            for (HashIntSet candidate : candidates) {
+                MetaData<Pair<Integer, Integer>> candData = candsData.get(candidate);
+                HashIntObjMap<HashIntSet> nodeEdgeCand = candData.nodeEdgeMap;
+                int candSkipped = candData.snapInfo.getA();
+                int candNumSnaps = candData.snapInfo.getB();
+                if (isAVGDenseSubgraph(candidate, size, candSkipped, candNumSnaps, minDen)) {
+                    denseSubs.add(new Pair<>(candidate, getAVGDensity(candidate, size, skipped, numSnaps)));
                     continue;
                 }
                 if (candNumSnaps == 0) {

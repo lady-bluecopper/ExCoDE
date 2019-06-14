@@ -1,9 +1,12 @@
 package eu.unitn.disi.db.excode.main;
 
+import com.koloboke.collect.map.hash.HashIntDoubleMap;
+import com.koloboke.collect.map.hash.HashIntDoubleMaps;
 import com.koloboke.collect.map.hash.HashIntIntMap;
 import com.koloboke.collect.map.hash.HashIntIntMaps;
 import com.koloboke.collect.map.hash.HashIntObjMap;
 import com.koloboke.collect.map.hash.HashIntObjMaps;
+import com.koloboke.collect.map.hash.HashObjIntMap;
 import com.koloboke.collect.map.hash.HashObjObjMap;
 import com.koloboke.collect.map.hash.HashObjObjMaps;
 import com.koloboke.collect.set.hash.HashIntSet;
@@ -30,6 +33,7 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -107,7 +111,7 @@ public class Main {
             GPCliqueFinder gpfinder = new GPCliqueFinder(gpgraph);
             List<HashIntSet> gpcliques = gpfinder.findMaxCliquesWithCCs();
             DenseSubgraphsFinder DSFinder = new DenseSubgraphsFinder(graph, conf);
-            List<HashIntSet> result = DSFinder.findDiverseDenseSubgraphs(gpcliques);
+            List<Pair<HashIntSet, Double>> result = DSFinder.findDiverseDenseSubgraphsWithScore(gpcliques);
             System.out.println("Done");
             return subs2JSON(graph, result);
         } catch (IOException | JSONException e) {
@@ -129,29 +133,41 @@ public class Main {
         }
     }
 
-    public static String subs2JSON(DynamicGraph graph, List<HashIntSet> result) throws JSONException {
+    public static String subs2JSON(DynamicGraph graph, List<Pair<HashIntSet, Double>> result) throws JSONException {
         if (result.isEmpty()) {
             return "";
         }
+        Collections.sort(result, (Pair<HashIntSet, Double> p1, Pair<HashIntSet, Double> p2) -> - Double.compare(p1.getB(), p2.getB()));
         HashIntObjMap<Pair<Integer, HashIntSet>> nodes = HashIntObjMaps.newMutableMap();
         HashObjObjMap<Pair<Integer, Integer>, HashIntSet> edges = HashObjObjMaps.newMutableMap();
+        HashIntDoubleMap densities = HashIntDoubleMaps.newMutableMap();
+        DecimalFormat df = new DecimalFormat("#.###");
         int nodeCount = 0;
+        double previousDensity = Double.parseDouble(df.format(result.get(0).getB()));
+        int index = 1;
+        densities.put(index, previousDensity);
         for (int s = 0; s < result.size(); s++) {
-            for (int edge : result.get(s)) {
+            for (int edge : result.get(s).getA()) {
                 int src = graph.getSrc(edge);
                 int dst = graph.getDst(edge);
                 int srcId;
                 int dstId;
+                double thisDensity = Double.parseDouble(df.format(result.get(s).getB()));
+                if (thisDensity < previousDensity && index < 6) {
+                    index ++;
+                    previousDensity = thisDensity;
+                    densities.put(index, previousDensity);
+                }
                 if (nodes.containsKey(src)) {
                     Pair<Integer, HashIntSet> srcP = nodes.get(src);
                     srcId = srcP.getA();
                     HashIntSet srcA = srcP.getB();
-                    srcA.add(s);
+                    srcA.add(Integer.parseInt(String.format("%d%d", index, s)));
                     nodes.put(src, new Pair<Integer, HashIntSet>(srcId, srcA));
                 } else {
                     srcId = nodeCount;
                     HashIntSet srcA = HashIntSets.newMutableSet();
-                    srcA.add(s);
+                    srcA.add(Integer.parseInt(String.format("%d%d", index, s)));
                     nodes.put(src, new Pair<Integer, HashIntSet>(nodeCount, srcA));
                     nodeCount++;
                 }
@@ -159,24 +175,25 @@ public class Main {
                     Pair<Integer, HashIntSet> dstP = nodes.get(dst);
                     dstId = dstP.getA();
                     HashIntSet dstA = dstP.getB();
-                    dstA.add(s);
+                    dstA.add(Integer.parseInt(String.format("%d%d", index, s)));
                     nodes.put(dst, new Pair<Integer, HashIntSet>(dstId, dstA));
                 } else {
                     dstId = nodeCount;
                     HashIntSet dstA = HashIntSets.newMutableSet();
-                    dstA.add(s);
+                    dstA.add(Integer.parseInt(String.format("%d%d", index, s)));
                     nodes.put(dst, new Pair<Integer, HashIntSet>(nodeCount, dstA));
                     nodeCount++;
                 }
                 Pair<Integer, Integer> thisEdge = new Pair<>(srcId, dstId);
                 HashIntSet apps = edges.getOrDefault(thisEdge, HashIntSets.newMutableSet());
-                apps.add(s);
+                apps.add(Integer.parseInt(String.format("%d%d", index, s)));
                 edges.put(thisEdge, apps);
             }
         }
         JSONObject obj = new JSONObject();
         JSONArray JSONnodes = new JSONArray();
         JSONArray JSONedges = new JSONArray();
+        JSONArray JSONdensities = new JSONArray();
         List<Entry<Integer, Pair<Integer, HashIntSet>>> nodeList = new ArrayList(nodes.entrySet());
         Collections.sort(nodeList, (Entry<Integer, Pair<Integer, HashIntSet>> o1, Entry<Integer, Pair<Integer, HashIntSet>> o2) -> Integer.compare(o1.getValue().getA(), o2.getValue().getA()));
         for (Entry<Integer, Pair<Integer, HashIntSet>> entry : nodeList) {
@@ -198,6 +215,13 @@ public class Main {
             JSONedges.put(e);
         }
         obj.put("edges", JSONedges);
+        for (int id = index; id > 0; id --) {
+            JSONObject d = new JSONObject();
+            d.put("id", id);
+            d.put("value", densities.get(id));
+            JSONdensities.put(d);
+        }
+        obj.put("densities", JSONdensities);
         return obj.toString();
     }
 

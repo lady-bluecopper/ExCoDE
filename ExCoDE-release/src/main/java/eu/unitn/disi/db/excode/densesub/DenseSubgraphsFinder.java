@@ -2,6 +2,7 @@ package eu.unitn.disi.db.excode.densesub;
 
 import com.google.common.collect.Lists;
 import com.koloboke.collect.IntCursor;
+import com.koloboke.collect.map.hash.HashObjIntMap;
 import com.koloboke.collect.set.hash.HashIntSet;
 import com.koloboke.collect.set.hash.HashObjSet;
 import com.koloboke.collect.set.hash.HashObjSets;
@@ -9,8 +10,10 @@ import eu.unitn.disi.db.excode.graph.DynamicGraph;
 import eu.unitn.disi.db.excode.graph.SummaryGraph;
 import eu.unitn.disi.db.excode.utils.Pair;
 import eu.unitn.disi.db.excode.utils.Settings;
+import eu.unitn.disi.db.excode.utils.Triplet;
 import eu.unitn.disi.db.excode.utils.Utilities;
 import eu.unitn.disi.db.excode.webserver.utils.Configuration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -61,6 +64,11 @@ public class DenseSubgraphsFinder {
         System.out.println(".......................Found " + denseCorrelatedEdges.size() + " Dense Subgraphs in (s) " + ((System.currentTimeMillis() - start) / 1000));
         return denseCorrelatedEdges;
     }
+    
+    public List<Pair<HashIntSet, Double>> findDiverseDenseSubgraphsWithScore(List<HashIntSet> cliques) {
+        List<HashIntSet> candidates = extractAllCCs(cliques);
+        return exploreComponentsWithScore(candidates);
+    }
 
     private Pair<Integer, HashObjSet<HashIntSet>> iskMINDenseSubgraph(HashIntSet comp) {
         Pair<HashIntSet, Integer> p = graph.getKEdgeSnaps(comp, minEdgesInSnap);
@@ -77,6 +85,21 @@ public class DenseSubgraphsFinder {
                 : new Pair<Integer, HashObjSet<HashIntSet>>(-1, null);
     }
     
+    private Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double> iskMINDenseSubgraphWithScore(HashIntSet comp) {
+        Pair<HashIntSet, Integer> p = graph.getKEdgeSnaps(comp, minEdgesInSnap);
+        if (summaryGraph.isAVGDenseSubgraph(comp, p.getB(), p.getA().size(), minDen)) {
+            if (graph.isMINDense(comp, p.getA(), minDen)) {
+                return new Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double>(1, null, graph.getMINDensity(comp, p.getA())); 
+            }
+        }
+        if (!graph.containsDenseSubgraph(comp, p.getA(), minDen / 2)) {
+            return new Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double>(-1, null, -1.);
+        }
+        HashObjSet<Pair<HashIntSet, Double>> denseSubs = graph.extractDenseSubgraphsWithScore(comp, p.getA(), minDen);
+        return (!denseSubs.isEmpty()) ? new Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double>(0, denseSubs, -1.) 
+                : new Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double>(-1, null, -1.);
+    }
+    
     private Pair<Integer, HashObjSet<HashIntSet>> iskAVGDenseSubgraph(HashIntSet comp) {
         Pair<HashIntSet, Integer> p = graph.getKEdgeSnaps(comp, minEdgesInSnap);
         if (summaryGraph.isAVGDenseSubgraph(comp, p.getB(), p.getA().size(), minDen)) {
@@ -88,6 +111,19 @@ public class DenseSubgraphsFinder {
         }
         return (!denseSubs.isEmpty()) ? new Pair<Integer, HashObjSet<HashIntSet>>(0, denseSubs)
                 : new Pair<Integer, HashObjSet<HashIntSet>>(-1, null);
+    }
+    
+    private Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double> iskAVGDenseSubgraphWithScore(HashIntSet comp) {
+        Pair<HashIntSet, Integer> p = graph.getKEdgeSnaps(comp, minEdgesInSnap);
+        if (summaryGraph.isAVGDenseSubgraph(comp, p.getB(), p.getA().size(), minDen)) {
+            return new Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double>(1, null, summaryGraph.getAVGDensity(comp, p.getB(), p.getA().size()));
+        }
+        HashObjSet<Pair<HashIntSet, Double>> denseSubs = HashObjSets.newMutableSet();
+        if (summaryGraph.containsDenseSubgraph(comp, p.getB(), p.getA().size(), minDen / 2)) {
+            denseSubs = summaryGraph.extractDenseSubgraphsWithScore(comp, p.getB(), p.getA().size(), minDen);
+        }
+        return (!denseSubs.isEmpty()) ? new Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double>(0, denseSubs, -1.)
+                : new Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double>(-1, null, -1.);
     }
 
     public void exploreComponents(Collection<HashIntSet> candidates) {
@@ -112,6 +148,31 @@ public class DenseSubgraphsFinder {
             });
         }
     }
+    
+    public List<Pair<HashIntSet, Double>> exploreComponentsWithScore(Collection<HashIntSet> candidates) {
+        List<Pair<HashIntSet, Double>> denCorEdgesWithScore = new ArrayList<Pair<HashIntSet, Double>>();
+        HashObjSet<Pair<HashIntSet, Double>> denseSubs = HashObjSets.newMutableSet();
+        candidates.stream().forEachOrdered(cand -> {
+            if (isValidCandidate(cand, denseSubs, denCorEdgesWithScore)) {
+                Triplet<Integer, HashObjSet<Pair<HashIntSet, Double>>, Double> result = (isMA) ? iskMINDenseSubgraphWithScore(cand) : iskAVGDenseSubgraphWithScore(cand);
+                if (result.getA() == 1) {
+                    denCorEdgesWithScore.add(new Pair<HashIntSet, Double>(cand, result.getC()));
+                } else if (result.getA() == 0) {
+                    denseSubs.addAll(result.getB());
+                }
+            }
+        });
+        if (denseSubs.size() > 0) {
+            List<Pair<HashIntSet, Double>> denseSubsList = Lists.newArrayList(denseSubs);
+            Collections.sort(denseSubsList, (Pair<HashIntSet, Double> s1, Pair<HashIntSet, Double> s2) -> -Integer.compare(s1.getA().size(), s2.getA().size()));
+            denseSubsList.stream().forEachOrdered(subgraph -> {
+                if (isValidCandidate(subgraph.getA())) {
+                    denCorEdgesWithScore.add(subgraph);
+                }
+            });
+        }
+        return denCorEdgesWithScore;
+    }
 
     private boolean isValidCandidate(HashIntSet cand, HashObjSet<HashIntSet> denseSubs) {
         if (cand.size() >= maxCCSize) {
@@ -121,6 +182,16 @@ public class DenseSubgraphsFinder {
             return false;
         }
         return denseCorrelatedEdges.parallelStream().noneMatch(res -> Utilities.jaccardSimilarity(res, cand) >= maxJac);
+    }
+    
+    private boolean isValidCandidate(HashIntSet cand, HashObjSet<Pair<HashIntSet, Double>> denseSubs, List<Pair<HashIntSet, Double>> denseGroups) {
+        if (cand.size() >= maxCCSize) {
+            return false;
+        }
+        if (denseSubs.parallelStream().anyMatch(dense -> (dense.getA().containsAll(cand))) || !isMaximal(cand)) {
+            return false;
+        }
+        return denseGroups.parallelStream().noneMatch(res -> Utilities.jaccardSimilarity(res.getA(), cand) >= maxJac);
     }
     
     private boolean isValidCandidate(HashIntSet cand) {
