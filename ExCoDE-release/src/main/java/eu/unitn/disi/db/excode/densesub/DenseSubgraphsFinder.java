@@ -2,7 +2,6 @@ package eu.unitn.disi.db.excode.densesub;
 
 import com.google.common.collect.Lists;
 import com.koloboke.collect.IntCursor;
-import com.koloboke.collect.map.hash.HashObjIntMap;
 import com.koloboke.collect.set.hash.HashIntSet;
 import com.koloboke.collect.set.hash.HashObjSet;
 import com.koloboke.collect.set.hash.HashObjSets;
